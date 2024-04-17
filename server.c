@@ -23,7 +23,7 @@ int main(int argc, char **argv) {
         exit(0);
     }
 
-    char *ip = "172.20.10.2";
+    char *ip = "127.0.0.1";
     int port = atoi(argv[1]);
 
     struct DNS_Record dns_records[MAX_RECORDS] = {
@@ -104,7 +104,7 @@ int main(int argc, char **argv) {
         }
     }
 
+    close(sockfd);
 
-
-
-
+    return 0;
+}
