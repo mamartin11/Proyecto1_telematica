@@ -1,123 +1,110 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <winsock2.h>
+#include <unistd.h>
+#include <arpa/inet.h>
 
-// Estructura para la tabla de traducción de dominios a IPs y viceversa
-struct Entry {
-    char *domain;
-    char *ip;
+#define MAX_DOMAIN_LENGTH 100
+#define MAX_IP_LENGTH 16
+#define MAX_RECORDS 100
+
+struct DNS_Record {
+    char domain[MAX_DOMAIN_LENGTH];
+    char ip[MAX_IP_LENGTH];
 };
 
-// Tabla de traducción de dominios a IPs y viceversa
-struct Entry tabla[] = {
-    {"www.avianca.com", "204.74.99.103"},
-    {"www.facebook.com", "104.244.42.129"},
-    // Agregar más entradas según sea necesario
-};
+int ipv4_pton(const char *src, struct in_addr *dst) {
+    return inet_pton(AF_INET, src, dst);
+}
 
-// Tamaño de la tabla
-int tabla_size = sizeof(tabla) / sizeof(tabla[0]);
+int main(int argc, char **argv) {
+    if (argc != 2) {
+        printf("Usage: %s <port>\n", argv[0]);
+        exit(0);
+    }
 
-// Dirección IP y puerto del servidor
-char *server_ip = "10.161.62.74"; // Cambia a la IP de tu elección
-int server_port = 4455;
+    char *ip = "127.0.0.1";
+    int port = atoi(argv[1]);
 
-int main() {
-    WSADATA wsaData;
-    SOCKET sockfd, newsockfd;
-    struct sockaddr_in serv_addr, cli_addr;
-    int clilen;
+    struct DNS_Record dns_records[MAX_RECORDS] = {
+        {"www.google.com", "8.8.8.8"},
+        {"www.gmail.com", "208.65.153.238"}
+        // Agrega más registros aquí si es necesario
+    };
+
+    int sockfd;
+    struct sockaddr_in server_addr, client_addr;
     char buffer[1024];
+    socklen_t addr_size;
+    int n;
 
-    // Inicializar Winsock
-    if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
-        printf("Error al inicializar Winsock\n");
-        return 1;
+    sockfd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (sockfd < 0) {
+        perror("[-]socket error");
+        exit(1);
     }
 
-    // Crear un socket TCP/IP
-    sockfd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-    if (sockfd == INVALID_SOCKET) {
-        printf("Error al abrir el socket\n");
-        WSACleanup();
-        return 1;
+    memset(&server_addr, 0, sizeof(server_addr));
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons(port);
+    server_addr.sin_addr.s_addr = inet_addr(ip);
+
+    n = bind(sockfd, (struct sockaddr*)&server_addr, sizeof(server_addr));
+    if (n < 0) {
+        perror("[-]bind error");
+        exit(1);
     }
-
-    // Configurar la dirección del servidor
-    memset(&serv_addr, 0, sizeof(serv_addr));
-    serv_addr.sin_family = AF_INET;
-    serv_addr.sin_addr.s_addr = inet_addr(server_ip);
-    serv_addr.sin_port = htons(server_port);
-
-    // Enlazar el socket al puerto
-    if (bind(sockfd, (struct sockaddr *) &serv_addr, sizeof(serv_addr)) == SOCKET_ERROR) {
-        printf("Error al enlazar\n");
-        closesocket(sockfd);
-        WSACleanup();
-        return 1;
-    }
-
-    // Escuchar conexiones entrantes
-    if (listen(sockfd, 5) == SOCKET_ERROR) {
-        printf("Error al escuchar\n");
-        closesocket(sockfd);
-        WSACleanup();
-        return 1;
-    }
-
-    clilen = sizeof(cli_addr);
 
     while (1) {
-        printf("Esperando conexión...\n");
-        // Esperar una conexión
-        newsockfd = accept(sockfd, (struct sockaddr *) &cli_addr, &clilen);
-        if (newsockfd == INVALID_SOCKET) {
-            printf("Error al aceptar la conexión\n");
-            closesocket(sockfd);
-            WSACleanup();
-            return 1;
-        }
-
-        printf("Conexión establecida desde %s:%d\n", inet_ntoa(cli_addr.sin_addr), ntohs(cli_addr.sin_port));
-
-        // Recibir solicitud del cliente
         memset(buffer, 0, sizeof(buffer));
-        if (recv(newsockfd, buffer, sizeof(buffer), 0) == SOCKET_ERROR) {
-            printf("Error al leer del socket\n");
-            closesocket(newsockfd);
-            closesocket(sockfd);
-            WSACleanup();
-            return 1;
+        addr_size = sizeof(client_addr);
+        n = recvfrom(sockfd, buffer, sizeof(buffer), 0, (struct sockaddr*)&client_addr, &addr_size);
+        if (n < 0) {
+            perror("[-]recvfrom error");
+            exit(1);
         }
-        printf("Solicitud recibida: %s\n", buffer);
 
-        // Buscar en la tabla y enviar respuesta
-        int i;
-        char *response = "No se encontró la IP o dominio en la tabla";
-        for (i = 0; i < tabla_size; i++) {
-            if (strcmp(buffer, tabla[i].domain) == 0) {
-                response = tabla[i].ip;
-                break;
-            } else if (strcmp(buffer, tabla[i].ip) == 0) {
-                response = tabla[i].domain;
-                break;
+        struct in_addr addr;
+        if (ipv4_pton(buffer, &addr) == 1) {
+            printf("[+]IP received: %s\n", buffer);
+            char* domain_response = NULL;
+            for (int i = 0; i < MAX_RECORDS; i++) {
+                if (strcmp(buffer, dns_records[i].ip) == 0) {
+                    domain_response = dns_records[i].domain;
+                    break;
+                }
+            }
+
+            if (domain_response == NULL) {
+                strcpy(buffer, "Domain not found.");
+            } else {
+                sprintf(buffer, "http://%s", domain_response);
+            }
+        } else {
+            printf("[+]Domain received: %s\n", buffer);
+            char* ip_response = NULL;
+            for (int i = 0; i < MAX_RECORDS; i++) {
+                if (strcmp(buffer, dns_records[i].domain) == 0) {
+                    ip_response = dns_records[i].ip;
+                    break;
+                }
+            }
+
+            if (ip_response == NULL) {
+                strcpy(buffer, "IP not found.");
+            } else {
+                sprintf(buffer, "http://%s", ip_response);
             }
         }
 
-        // Enviar respuesta al cliente
-        if (send(newsockfd, response, strlen(response), 0) == SOCKET_ERROR) {
-            printf("Error al escribir en el socket\n");
-            closesocket(newsockfd);
-            closesocket(sockfd);
-            WSACleanup();
-            return 1;
+        n = sendto(sockfd, buffer, sizeof(buffer), 0, (struct sockaddr*)&client_addr, sizeof(client_addr));
+        if (n < 0) {
+            perror("[-]sendto error");
+            exit(1);
         }
-
-        closesocket(newsockfd);
     }
 
-    closesocket(sockfd);
-    WSACleanup();
+    close(sockfd);
+
     return 0;
 }
